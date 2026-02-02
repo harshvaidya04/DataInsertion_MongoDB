@@ -24,18 +24,41 @@ class ContentAgent:
         self.db = DBManager(config.MONGO_URI, config.DB_NAME)
         self.ai = QuestionGenerator(config.PROJECT_ID, config.LOCATION, config.MODEL_NAME)
         self._question_counter = 0
+        self._stats = {
+            'total_generated': 0,
+            'total_inserted': 0,
+            'total_duplicates': 0,
+            'exact_duplicates': 0,
+            'fuzzy_duplicates': 0
+        }
     
     def run(self):
         """Main execution loop."""
         logger.info("🚀 Gyapak Content Agent Started")
+        logger.info(f"📊 Configuration: Batch Size={config.BATCH_SIZE}, Fuzzy Threshold={config.FUZZY_MATCH_THRESHOLD}")
         
         try:
             while True:
                 self._process_round()
         except KeyboardInterrupt:
             logger.info("Shutting down gracefully...")
+            self._print_stats()
         finally:
             self.db.close()
+    
+    def _print_stats(self):
+        """Print generation statistics."""
+        logger.info("=" * 60)
+        logger.info("📈 GENERATION STATISTICS:")
+        logger.info(f"  Total Generated: {self._stats['total_generated']}")
+        logger.info(f"  Total Inserted: {self._stats['total_inserted']}")
+        logger.info(f"  Total Duplicates: {self._stats['total_duplicates']}")
+        logger.info(f"    - Exact: {self._stats['exact_duplicates']}")
+        logger.info(f"    - Fuzzy: {self._stats['fuzzy_duplicates']}")
+        if self._stats['total_generated'] > 0:
+            success_rate = (self._stats['total_inserted'] / self._stats['total_generated']) * 100
+            logger.info(f"  Success Rate: {success_rate:.1f}%")
+        logger.info("=" * 60)
     
     def _process_round(self):
         """Process one complete round of gap filling with PARALLEL processing."""
@@ -45,6 +68,7 @@ class ContentAgent:
             
             if not low_count_exams:
                 logger.info(f"🎉 All exams reached threshold of {config.GAP_THRESHOLD}")
+                self._print_stats()
                 logger.info(f"Sleeping for {config.NO_GAPS_DELAY_SECONDS}s...")
                 time.sleep(config.NO_GAPS_DELAY_SECONDS)
                 return
@@ -52,7 +76,7 @@ class ContentAgent:
             logger.info(f"Found {len(low_count_exams)} exams requiring content")
             
             # PARALLEL PROCESSING: Process multiple exams simultaneously
-            max_workers = min(3, len(low_count_exams))  # Process up to 3 exams at once
+            max_workers = min(config.MAX_PARALLEL_EXAMS, len(low_count_exams))
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = {executor.submit(self._process_exam, exam): exam for exam in low_count_exams}
                 
@@ -64,6 +88,7 @@ class ContentAgent:
                         logger.error(f"Error processing {exam['_id']}: {e}")
             
             logger.info("✅ Round complete. Restarting gap check...")
+            self._print_stats()
             time.sleep(config.ROUND_DELAY_SECONDS)
             
         except Exception as e:
@@ -81,15 +106,31 @@ class ContentAgent:
             return
         
         seed = random.choice(seeds)
+        logger.info(f"📝 Using seed - Topic: {seed.get('topic', 'N/A')}, Subtopic: {seed.get('subtopic', 'N/A')}")
         
         try:
             raw_response = self.ai.generate(json.dumps(seed, default=str), count=config.BATCH_SIZE)
             new_questions = self._parse_ai_response(raw_response)
             
-            processed = self._process_questions(new_questions, seed)
-            inserted = self.db.bulk_insert_questions(processed)
+            logger.info(f"🤖 AI generated {len(new_questions)} questions")
+            self._stats['total_generated'] += len(new_questions)
             
-            logger.info(f"✅ Added {inserted}/{len(new_questions)} questions to {exam_slug}")
+            # Show sample of generated questions for debugging
+            if new_questions:
+                sample_q = new_questions[0]['question'][:80]
+                logger.info(f"   Sample: {sample_q}...")
+            
+            processed = self._process_questions(new_questions, seed)
+            
+            if processed:
+                inserted = self.db.bulk_insert_questions(processed)
+                self._stats['total_inserted'] += inserted
+                logger.info(f"✅ Added {inserted}/{len(new_questions)} questions to {exam_slug}")
+                
+                if inserted < len(processed):
+                    logger.warning(f"⚠️ {len(processed) - inserted} questions failed to insert (likely DB duplicates)")
+            else:
+                logger.warning(f"⚠️ All {len(new_questions)} questions were duplicates!")
             
             time.sleep(config.BATCH_DELAY_SECONDS)
             
@@ -106,32 +147,53 @@ class ContentAgent:
     def _process_questions(self, questions: List[Dict], seed: Dict) -> List[Dict]:
         """Filter duplicates and hydrate questions with metadata."""
         topic = seed.get('topic')
+        
+        # Get existing questions for this topic
         existing_questions = self.db.get_questions_by_topic(topic)
+        logger.info(f"🔍 Checking against {len(existing_questions)} existing questions in topic '{topic}'")
         
         processed = []
-        for q in questions:
-            if self._is_duplicate(q['question'], existing_questions):
+        for i, q in enumerate(questions):
+            is_dup, dup_type = self._is_duplicate(q['question'], existing_questions)
+            if is_dup:
+                if dup_type == 'exact':
+                    self._stats['exact_duplicates'] += 1
+                else:
+                    self._stats['fuzzy_duplicates'] += 1
+                logger.debug(f"   Q{i+1}: Duplicate ({dup_type})")
                 continue
             
             hydrated = self._hydrate_question(q, seed)
             processed.append(hydrated)
+            logger.debug(f"   Q{i+1}: ✓ Unique")
         
-        logger.info(f"Filtered {len(questions) - len(processed)} duplicates")
+        duplicates_found = len(questions) - len(processed)
+        self._stats['total_duplicates'] += duplicates_found
+        
+        logger.info(f"🔬 Duplicate Analysis: {duplicates_found}/{len(questions)} filtered")
+        logger.info(f"   Exact: {self._stats['exact_duplicates']}, Fuzzy: {self._stats['fuzzy_duplicates']}")
+        
         return processed
     
-    def _is_duplicate(self, question_text: str, existing_questions: List[str]) -> bool:
-        """Check if question is duplicate (exact or fuzzy match)."""
-        if self.db.find_exact_match(question_text):
-            logger.debug("Exact duplicate found")
-            return True
+    def _is_duplicate(self, question_text: str, existing_questions: List[str]) -> tuple:
+        """
+        Check if question is duplicate (exact or fuzzy match).
         
+        Returns:
+            Tuple of (is_duplicate: bool, type: str)
+        """
+        # Check exact match first (faster)
+        if self.db.find_exact_match(question_text):
+            return (True, 'exact')
+        
+        # Check fuzzy matches
         for existing in existing_questions:
             score = fuzz.token_set_ratio(question_text, existing)
             if score > config.FUZZY_MATCH_THRESHOLD:
-                logger.debug(f"Similar question found (Score: {score})")
-                return True
+                logger.debug(f"   Fuzzy match score: {score}")
+                return (True, 'fuzzy')
         
-        return False
+        return (False, None)
     
     def _hydrate_question(self, question: Dict, seed: Dict) -> Dict:
         """Add metadata and system fields to question."""
