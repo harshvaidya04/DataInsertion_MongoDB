@@ -22,7 +22,7 @@ class Config:
     # Duplicate Detection Settings
     # ADJUSTED: Increased threshold from 50 to 75 to allow more variations
     # This reduces false positives in duplicate detection
-    FUZZY_MATCH_THRESHOLD = 75  # Score above which questions are considered duplicates (0-100)
+    FUZZY_MATCH_THRESHOLD = 60  # Score above which questions are considered duplicates (0-100)
     
     # Processing Configuration
     MAX_PARALLEL_EXAMS = 3  # Process up to 3 exams simultaneously

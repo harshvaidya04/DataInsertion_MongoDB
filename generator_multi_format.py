@@ -219,8 +219,6 @@ class QuestionGenerator:
 3. Use diverse contexts: {', '.join(contexts[:5])}
 4. Mix different grammatical concepts across questions
 5. Ensure questions test DIFFERENT skills (vocabulary, grammar, idioms, contextual meaning)
-
-✅ QUESTION FORMAT RULES:
 - Use '____' to mark the blank (exactly 4 underscores)
 - Provide exactly 4 options as array of strings
 - Only ONE option should be correct
