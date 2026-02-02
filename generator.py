@@ -145,7 +145,7 @@ class QuestionGenerator:
 - Cause-effect relationships
 - Comparisons and contrasts
 
-📋 OUTPUT FORMAT:
+OUTPUT FORMAT:
 Return a JSON array of {count} question objects with these fields:
 - qid: string (use "GEN_<number>")
 - question: string (with '____' for blank)
@@ -164,8 +164,8 @@ Return a JSON array of {count} question objects with these fields:
 - Ambiguous questions where multiple options could fit
 
 💡 EXAMPLE OF GOOD VARIETY:
-❌ BAD: All questions about "running" or "walking"
-✅ GOOD: Question 1 about business negotiations, Q2 about scientific research, Q3 about historical events, Q4 about artistic expression
+BAD: All questions about "running" or "walking"
+GOOD: Question 1 about business negotiations, Q2 about scientific research, Q3 about historical events, Q4 about artistic expression
 
 NOW CREATE {count} HIGHLY DIVERSE, UNIQUE QUESTIONS:"""
 
