@@ -66,7 +66,7 @@ class QuestionGenerator:
         seed_data = json.loads(seed_json)
         topic = seed_data.get('topic', 'Fill in the Blanks')
         
-prompt = f"""Act as a Senior Exam Setter for SSC-CGL and IBPS.
+        prompt = f"""Act as a Senior Exam Setter for SSC-CGL and IBPS.
 
 CRITICAL: Create UNIQUE questions. DO NOT repeat patterns.
 Each question MUST be distinctly different in:
