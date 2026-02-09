@@ -38,6 +38,8 @@ class DBManager:
             self.collection.create_index([("topic", ASCENDING)], background=True)
             # Index for exam slug queries
             self.collection.create_index([("examSlug", ASCENDING)], background=True)
+            # ✅ Compound index for scoped queries
+            self.collection.create_index([("topic", ASCENDING), ("examSlug", ASCENDING)], background=True)
             logger.info("Database indexes verified")
         except Exception as e:
             logger.warning(f"Index creation warning: {e}")
@@ -104,6 +106,25 @@ class DBManager:
         """
         cursor = self.collection.find(
             {"topic": topic},
+            {"question": 1, "_id": 0}
+        )
+        return [doc['question'] for doc in cursor]
+    
+    def get_questions_by_topic_and_exam(self, topic: str, exam_slug: str) -> List[str]:
+        """
+        ✅ SCOPED METHOD: Get questions for both topic AND exam.
+        
+        This prevents comparing questions across different exams.
+        
+        Args:
+            topic: Topic name
+            exam_slug: Exam identifier
+            
+        Returns:
+            List of question texts for this topic in this exam
+        """
+        cursor = self.collection.find(
+            {"topic": topic, "examSlug": exam_slug},
             {"question": 1, "_id": 0}
         )
         return [doc['question'] for doc in cursor]

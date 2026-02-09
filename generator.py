@@ -1,51 +1,70 @@
 import json
 import logging
 import hashlib
-from google import genai
-from google.genai import types
+from openai import OpenAI
 from typing import Dict
 
 logger = logging.getLogger(__name__)
 
 
 class QuestionGenerator:
-    """Handles AI-powered question generation using Google's Gemini model."""
+    """Handles AI-powered question generation using OpenAI's GPT models."""
     
-    # Class-level schema (defined once, reused for all instances)
+    # JSON schema for structured output
     _SCHEMA = {
-        "type": "ARRAY",
-        "items": {
-            "type": "OBJECT",
-            "properties": {
-                "qid": {"type": "STRING"},
-                "question": {"type": "STRING"},
-                "options": {
-                    "type": "ARRAY",
-                    "items": {"type": "STRING"},
-                    "minItems": 4,
-                    "maxItems": 4
+        "type": "json_schema",
+        "json_schema": {
+            "name": "question_generation",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "questions": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "qid": {"type": "string"},
+                                "question": {"type": "string"},
+                                "options": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "minItems": 4,
+                                    "maxItems": 4
+                                },
+                                "correct": {"type": "integer"},
+                                "difficulty": {
+                                    "type": "string",
+                                    "enum": ["easy", "medium", "hard"]
+                                },
+                                "topic": {"type": "string"},
+                                "subtopic": {"type": "string"},
+                                "tags": {
+                                    "type": "array",
+                                    "items": {"type": "string"}
+                                }
+                            },
+                            "required": ["qid", "question", "options", "correct", "difficulty", "topic", "subtopic", "tags"],
+                            "additionalProperties": False
+                        }
+                    }
                 },
-                "correct": {"type": "INTEGER"},
-                "difficulty": {"type": "STRING"},
-                "topic": {"type": "STRING"},
-                "subtopic": {"type": "STRING"},
-                "tags": {
-                    "type": "ARRAY",
-                    "items": {"type": "STRING"}
-                }
-            },
-            "required": ["qid", "question", "options", "correct"]
+                "required": ["questions"],
+                "additionalProperties": False
+            }
         }
     }
     
-    def __init__(self, project_id: str, location: str, model_name: str):
-        """Initialize Vertex AI client with Google Gemini."""
-        logger.info(f"Initializing Vertex AI - Project: {project_id}, Location: {location}, Model: {model_name}")
-        self.client = genai.Client(
-            vertexai=True,
-            project=project_id,
-            location=location
-        )
+    def __init__(self, api_key: str, model_name: str = "gpt-4o"):
+        """
+        Initialize OpenAI client.
+        
+        Args:
+            api_key: OpenAI API key
+            model_name: Model to use (default: gpt-4o, can use gpt-4o-mini for cheaper)
+        """
+        logger.info(f"Initializing OpenAI - Model: {model_name}")
+        self.client = OpenAI(api_key=api_key)
         self.model_name = model_name
         self._generation_count = 0
     
@@ -58,7 +77,7 @@ class QuestionGenerator:
             count: Number of questions to generate (default: 5)
             
         Returns:
-            JSON string containing generated questions
+            JSON string containing generated questions (as array)
         """
         seed_data = json.loads(seed_json)
         topic = seed_data.get('topic', 'Fill in the Blanks')
@@ -72,28 +91,41 @@ class QuestionGenerator:
         # Build context-aware prompt
         prompt = self._build_enhanced_prompt(topic, subtopic, exam_slug, count, variety_seed)
         
-        response = self.client.models.generate_content(
-            model=self.model_name,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=self._SCHEMA,
-                temperature=1.2,  # Increased for more creativity
-                top_p=0.95,
-                top_k=40
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are an expert question creator for competitive government exams in India. Generate high-quality, diverse questions in valid JSON format."
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                response_format=self._SCHEMA,
+                temperature=1.2,
+                max_tokens=4000
             )
-        )
-        return response.text
+            
+            # Extract the questions array from the response
+            content = json.loads(response.choices[0].message.content)
+            questions = content.get('questions', [])
+            
+            # Return as JSON array (matching the old format)
+            return json.dumps(questions)
+            
+        except Exception as e:
+            logger.error(f"OpenAI API error: {e}")
+            raise
     
     def _build_enhanced_prompt(self, topic: str, subtopic: str, exam_slug: str, count: int, variety_seed: str) -> str:
         """Build a context-rich prompt that encourages diversity."""
         
-        # Define diverse contexts for different exam types
         contexts = self._get_exam_contexts(exam_slug)
         
-        prompt = f"""You are an Expert Question Creator for competitive exams like SSC-CGL, IBPS, NDA, and other government exams.
-
-🎯 MISSION: Create {count} COMPLETELY UNIQUE "Fill in the Blank" questions.
+        prompt = f"""Create {count} COMPLETELY UNIQUE "Fill in the Blank" questions for competitive exams.
 
 📚 TOPIC: {topic}
 {f"📌 SUBTOPIC: {subtopic}" if subtopic else ""}
@@ -113,61 +145,51 @@ class QuestionGenerator:
 - Options should be plausible but only one fits the context
 - Question must have enough context to determine the correct answer
 
-🎨 DIVERSITY STRATEGIES (Apply these across your {count} questions):
+🎨 DIVERSITY STRATEGIES:
 
 **Vocabulary Variety:**
-- Question 1-2: Business/Corporate vocabulary
-- Question 3-4: Social/Cultural contexts
-- Question 5-6: Scientific/Technical terms
-- Question 7-8: Historical/Political references
-- Question 9-10: Literary/Artistic expressions
+- Questions 1-2: Business/Corporate vocabulary
+- Questions 3-4: Social/Cultural contexts
+- Questions 5-6: Scientific/Technical terms
+- Questions 7-8: Historical/Political references
 
 **Grammar Patterns:**
 - Mix: Present, Past, Future, Perfect tenses
 - Include: Active and Passive voice
 - Vary: Simple, Compound, Complex sentences
-- Add: Conditionals, Subjunctive mood
-- Use: Different prepositions, phrasal verbs, idioms
+- Use: Prepositions, phrasal verbs, idioms
 
 **Context Types:**
 - Professional scenarios (workplace, business meetings)
 - Academic situations (classroom, research, exams)
-- Social events (celebrations, gatherings, conversations)
+- Social events (celebrations, conversations)
 - News/Current affairs (politics, economy, environment)
 - Personal life (family, relationships, daily activities)
-- Technology (innovation, digital world)
-- Nature/Environment (wildlife, climate, geography)
+- Technology and innovation
+- Nature and Environment
 
-**Sentence Structures:**
-- Declarative statements
-- Questions converted to statements
-- Conditional sentences (if-then)
-- Cause-effect relationships
-- Comparisons and contrasts
+**Difficulty Distribution:**
+- Easy (30%): Common vocabulary, simple grammar
+- Medium (50%): Moderate vocabulary, compound sentences
+- Hard (20%): Advanced vocabulary, complex grammar
 
-OUTPUT FORMAT:
-Return a JSON array of {count} question objects with these fields:
-- qid: string (use "GEN_<number>")
+REQUIRED OUTPUT:
+- qid: string (use "GEN_1", "GEN_2", etc.)
 - question: string (with '____' for blank)
-- options: array of 4 strings
+- options: array of exactly 4 strings
 - correct: integer (0-3, index of correct answer)
-- difficulty: string ("easy", "medium", "hard")
+- difficulty: string (must be "easy", "medium", or "hard")
 - topic: string (use "{topic}")
 - subtopic: string (use "{subtopic if subtopic else topic}")
-- tags: array of relevant tags (grammar concepts, themes)
+- tags: array of relevant tags (e.g., ["prepositions", "business-context"])
 
 🚫 AVOID:
-- Repeating the same vocabulary across questions
-- Using similar sentence patterns
-- Creating questions that all test the same concept
+- Repeating the same vocabulary
+- Similar sentence patterns
 - Generic or boring contexts
 - Ambiguous questions where multiple options could fit
 
-💡 EXAMPLE OF GOOD VARIETY:
-BAD: All questions about "running" or "walking"
-GOOD: Question 1 about business negotiations, Q2 about scientific research, Q3 about historical events, Q4 about artistic expression
-
-NOW CREATE {count} HIGHLY DIVERSE, UNIQUE QUESTIONS:"""
+Generate {count} highly diverse, unique questions now."""
 
         return prompt
     
@@ -175,22 +197,22 @@ NOW CREATE {count} HIGHLY DIVERSE, UNIQUE QUESTIONS:"""
         """Return context suggestions based on exam type."""
         
         context_map = {
-            'ssc-cgl': ['government services', 'public administration', 'clerical work', 'financial management', 'law enforcement'],
-            'ibps': ['banking operations', 'financial markets', 'customer service', 'loan processing', 'risk management'],
-            'upsc': ['civil services', 'international relations', 'public policy', 'governance', 'constitutional matters'],
-            'nda': ['military operations', 'defense strategy', 'national security', 'discipline', 'leadership'],
-            'railway': ['transportation', 'logistics', 'safety protocols', 'technical operations', 'public service'],
-            'jee': ['physics concepts', 'chemistry reactions', 'mathematics problems', 'engineering principles', 'scientific methods'],
-            'neet': ['medical science', 'biology concepts', 'health care', 'anatomy', 'disease management'],
-            'cat': ['business management', 'analytical reasoning', 'data interpretation', 'logical thinking', 'quantitative skills']
+            'ssc-cgl': ['government services', 'public administration', 'clerical work', 'financial management'],
+            'ibps': ['banking operations', 'financial markets', 'customer service', 'loan processing'],
+            'sbi': ['banking operations', 'financial markets', 'customer service', 'loan processing'],
+            'upsc': ['civil services', 'international relations', 'public policy', 'governance'],
+            'nda': ['military operations', 'defense strategy', 'national security', 'leadership'],
+            'railway': ['transportation', 'logistics', 'safety protocols', 'technical operations'],
+            'rrb': ['railway operations', 'transportation', 'logistics', 'safety'],
+            'jee': ['physics concepts', 'chemistry reactions', 'mathematics problems', 'engineering'],
+            'neet': ['medical science', 'biology concepts', 'health care', 'anatomy'],
+            'cat': ['business management', 'analytical reasoning', 'data interpretation']
         }
         
-        # Check if exam_slug contains any key
         for key, contexts in context_map.items():
             if key in exam_slug.lower():
                 return contexts
         
-        # Default diverse contexts
         return [
             'business and commerce', 'education and learning', 'technology and innovation',
             'social interactions', 'government and politics', 'science and research',

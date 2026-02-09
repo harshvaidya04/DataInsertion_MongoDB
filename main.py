@@ -22,7 +22,7 @@ class ContentAgent:
     
     def __init__(self):
         self.db = DBManager(config.MONGO_URI, config.DB_NAME)
-        self.ai = QuestionGenerator(config.PROJECT_ID, config.LOCATION, config.MODEL_NAME)
+        self.ai = QuestionGenerator(config.OPENAI_API_KEY, config.MODEL_NAME)
         self._question_counter = 0
         self._stats = {
             'total_generated': 0,
@@ -135,22 +135,53 @@ class ContentAgent:
             time.sleep(config.BATCH_DELAY_SECONDS)
             
         except Exception as e:
-            if "429" in str(e):
+            if "429" in str(e) or "rate_limit" in str(e).lower():
                 raise
             logger.error(f"⚠️ Error processing {exam_slug}: {e}")
     
     def _parse_ai_response(self, raw_response: str) -> List[Dict]:
-        """Parse and clean AI response."""
-        cleaned = raw_response.replace("```json", "").replace("```", "").strip()
-        return json.loads(cleaned)
+        """Parse and clean AI response with robust error handling."""
+        try:
+            # Remove markdown code blocks if present
+            cleaned = raw_response.replace("```json", "").replace("```", "").strip()
+            
+            # Try to parse as-is first
+            data = json.loads(cleaned)
+            
+            # OpenAI returns {"questions": [...]}
+            if isinstance(data, dict) and 'questions' in data:
+                return data['questions']
+            # Fallback if it's already an array
+            elif isinstance(data, list):
+                return data
+            else:
+                logger.error(f"Unexpected response format: {type(data)}")
+                return []
+                
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON parsing failed at position {e.pos}: {e.msg}")
+            logger.debug(f"Response preview (first 500 chars): {raw_response[:500]}...")
+            logger.debug(f"Response preview (last 200 chars): ...{raw_response[-200:]}")
+            
+            # Log the problematic area
+            if hasattr(e, 'pos') and e.pos:
+                start = max(0, e.pos - 100)
+                end = min(len(raw_response), e.pos + 100)
+                logger.debug(f"Problem area: ...{raw_response[start:end]}...")
+            
+            return []
+        except Exception as e:
+            logger.error(f"Unexpected error parsing response: {e}")
+            return []
     
     def _process_questions(self, questions: List[Dict], seed: Dict) -> List[Dict]:
         """Filter duplicates and hydrate questions with metadata."""
         topic = seed.get('topic')
+        exam_slug = seed.get('examSlug')  # ✅ ADDED
         
-        # Get existing questions for this topic
-        existing_questions = self.db.get_questions_by_topic(topic)
-        logger.info(f"🔍 Checking against {len(existing_questions)} existing questions in topic '{topic}'")
+        # ✅ FIXED: Use scoped query
+        existing_questions = self.db.get_questions_by_topic_and_exam(topic, exam_slug)
+        logger.info(f"🔍 Checking against {len(existing_questions)} existing questions in topic '{topic}' for exam '{exam_slug}'")
         
         processed = []
         for i, q in enumerate(questions):
@@ -223,9 +254,9 @@ class ContentAgent:
         """Handle errors with appropriate backoff."""
         error_msg = str(error)
         
-        if "429" in error_msg:
+        if "429" in error_msg or "rate_limit" in error_msg.lower():
             wait_time = random.randint(config.QUOTA_BACKOFF_MIN, config.QUOTA_BACKOFF_MAX)
-            logger.warning(f"🚨 QUOTA EXHAUSTED (429). Sleeping for {wait_time}s...")
+            logger.warning(f"🚨 RATE LIMIT HIT (429). Sleeping for {wait_time}s...")
             time.sleep(wait_time)
         else:
             logger.error(f"🚨 CRITICAL ERROR: {error}")
