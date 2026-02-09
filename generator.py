@@ -11,49 +11,79 @@ class QuestionGenerator:
     """Handles AI-powered question generation using OpenAI's GPT models."""
     
     # JSON schema for structured output
-    _SCHEMA = {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "question_generation",
-            "strict": True,
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "questions": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "qid": {"type": "string"},
-                                "question": {"type": "string"},
-                                "options": {
-                                    "type": "array",
-                                    "items": {"type": "string"},
-                                    "minItems": 4,
-                                    "maxItems": 4
-                                },
-                                "correct": {"type": "integer"},
-                                "difficulty": {
-                                    "type": "string",
-                                    "enum": ["easy", "medium", "hard"]
-                                },
-                                "topic": {"type": "string"},
-                                "subtopic": {"type": "string"},
-                                "tags": {
-                                    "type": "array",
-                                    "items": {"type": "string"}
-                                }
+    SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "gov_exam_questions",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "questions": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "qid": {"type": "string"},
+
+                            "questionType": {
+                                "type": "string",
+                                "enum": ["mcq", "msq", "fib", "sequence"]
                             },
-                            "required": ["qid", "question", "options", "correct", "difficulty", "topic", "subtopic", "tags"],
-                            "additionalProperties": False
-                        }
+
+                            "question": {"type": "string"},
+
+                            "options": {
+                                "type": "array",
+                                "items": {"type": "string"}
+                            },
+
+                            "correct": {
+                                "type": "array",
+                                "items": {"type": "integer"}
+                            },
+
+                            "answerText": {
+                                "type": "string"
+                            },
+
+                            "difficulty": {
+                                "type": "string",
+                                "enum": ["easy", "medium", "hard"]
+                            },
+
+                            "topic": {"type": "string"},
+                            "subtopic": {"type": "string"},
+
+                            "tags": {
+                                "type": "array",
+                                "items": {"type": "string"}
+                            }
+                        },
+
+                        # 🔥 ALL KEYS MUST BE HERE
+                        "required": [
+                            "qid",
+                            "questionType",
+                            "question",
+                            "options",
+                            "correct",
+                            "answerText",
+                            "difficulty",
+                            "topic",
+                            "subtopic",
+                            "tags"
+                        ],
+
+                        "additionalProperties": False
                     }
-                },
-                "required": ["questions"],
-                "additionalProperties": False
-            }
+                }
+            },
+            "required": ["questions"],
+            "additionalProperties": False
         }
     }
+}
     
     def __init__(self, api_key: str, model_name: str = "gpt-4o"):
         """
@@ -104,9 +134,9 @@ class QuestionGenerator:
                         "content": prompt
                     }
                 ],
-                response_format=self._SCHEMA,
-                temperature=1.2,
-                max_tokens=4000
+                response_format=self.SCHEMA,
+                temperature=0.7,
+                max_tokens=1200
             )
             
             # Extract the questions array from the response
@@ -125,7 +155,7 @@ class QuestionGenerator:
         
         contexts = self._get_exam_contexts(exam_slug)
         
-        prompt = f"""Create {count} COMPLETELY UNIQUE "Fill in the Blank" questions for competitive exams.
+        prompt = f"""Create {count} HIGH-QUALITY questions for Indian Government Exams.
 
 📚 TOPIC: {topic}
 {f"📌 SUBTOPIC: {subtopic}" if subtopic else ""}
@@ -139,12 +169,20 @@ class QuestionGenerator:
 5. Ensure questions test DIFFERENT skills (vocabulary, grammar, idioms, contextual meaning)
 
 ✅ QUESTION FORMAT RULES:
-- Use '____' to mark the blank (exactly 4 underscores)
-- Provide exactly 4 options as array of strings
-- Only ONE option should be correct
-- Options should be plausible but only one fits the context
-- Question must have enough context to determine the correct answer
+- For MCQ:
+  - options length = 4
+  - correct = [single index]
+  - answerText = ""
 
+- For FIB:
+  - options = []
+  - correct = []
+  - answerText = exact answer
+
+- For SEQUENCE:
+  - options = shuffled steps
+  - correct = correct order indices
+  - answerText = ""
 🎨 DIVERSITY STRATEGIES:
 
 **Vocabulary Variety:**
@@ -176,8 +214,8 @@ class QuestionGenerator:
 REQUIRED OUTPUT:
 - qid: string (use "GEN_1", "GEN_2", etc.)
 - question: string (with '____' for blank)
-- options: array of exactly 4 strings
-- correct: integer (0-3, index of correct answer)
+- options: array of strings (length depends on questionType)
+- correct: array of indices (example: [2])
 - difficulty: string (must be "easy", "medium", or "hard")
 - topic: string (use "{topic}")
 - subtopic: string (use "{subtopic if subtopic else topic}")

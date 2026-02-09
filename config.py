@@ -21,7 +21,7 @@ class Config:
     
     # Duplicate Detection Settings
     # ✅ FIXED: Changed from 0 to 85 for proper duplicate detection
-    FUZZY_MATCH_THRESHOLD = 85  # Score above which questions are considered duplicates (0-100)
+    FUZZY_MATCH_THRESHOLD = 65  # Score above which questions are considered duplicates (0-100)
     # 0 = Everything is a duplicate (nothing gets inserted)
     # 85 = Good balance (recommended)
     # 95 = Very strict (may allow near-duplicates)
