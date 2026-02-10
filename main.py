@@ -23,6 +23,7 @@ class ContentAgent:
     def __init__(self):
         self.db = DBManager(config.MONGO_URI, config.DB_NAME)
         self.ai = QuestionGenerator(config.OPENAI_API_KEY, config.MODEL_NAME)
+        print(hasattr(self.ai, "generate"))
         self._question_counter = 0
         self._stats = {
             'total_generated': 0,
@@ -109,9 +110,10 @@ class ContentAgent:
         logger.info(f"📝 Using seed - Topic: {seed.get('topic', 'N/A')}, Subtopic: {seed.get('subtopic', 'N/A')}")
         
         try:
-            raw_response = self.ai.generate(json.dumps(seed, default=str), count=config.BATCH_SIZE)
-            new_questions = self._parse_ai_response(raw_response)
-            
+            new_questions = self.ai.generate(
+            json.dumps(seed, default=str),
+            count=config.BATCH_SIZE
+            )
             logger.info(f"🤖 AI generated {len(new_questions)} questions")
             self._stats['total_generated'] += len(new_questions)
             
@@ -138,41 +140,6 @@ class ContentAgent:
             if "429" in str(e) or "rate_limit" in str(e).lower():
                 raise
             logger.error(f"⚠️ Error processing {exam_slug}: {e}")
-    
-    def _parse_ai_response(self, raw_response: str) -> List[Dict]:
-        """Parse and clean AI response with robust error handling."""
-        try:
-            # Remove markdown code blocks if present
-            cleaned = raw_response.replace("```json", "").replace("```", "").strip()
-            
-            # Try to parse as-is first
-            data = json.loads(cleaned)
-            
-            # OpenAI returns {"questions": [...]}
-            if isinstance(data, dict) and 'questions' in data:
-                return data['questions']
-            # Fallback if it's already an array
-            elif isinstance(data, list):
-                return data
-            else:
-                logger.error(f"Unexpected response format: {type(data)}")
-                return []
-                
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON parsing failed at position {e.pos}: {e.msg}")
-            logger.debug(f"Response preview (first 500 chars): {raw_response[:500]}...")
-            logger.debug(f"Response preview (last 200 chars): ...{raw_response[-200:]}")
-            
-            # Log the problematic area
-            if hasattr(e, 'pos') and e.pos:
-                start = max(0, e.pos - 100)
-                end = min(len(raw_response), e.pos + 100)
-                logger.debug(f"Problem area: ...{raw_response[start:end]}...")
-            
-            return []
-        except Exception as e:
-            logger.error(f"Unexpected error parsing response: {e}")
-            return []
     
     def _process_questions(self, questions: List[Dict], seed: Dict) -> List[Dict]:
         """Filter duplicates and hydrate questions with metadata."""
@@ -234,7 +201,7 @@ class ContentAgent:
         question['sectionName'] = seed.get('sectionName')
         question['topic'] = seed.get('topic')
         question['subtopic'] = seed.get('subtopic')
-        
+        question["answerText"] = question.get("answerText", "")
         question['status'] = config.DEFAULT_STATUS
         question['__v'] = config.DEFAULT_VERSION
         question['tags'] = question.get('tags', [])
