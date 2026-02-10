@@ -23,7 +23,6 @@ class ContentAgent:
     def __init__(self):
         self.db = DBManager(config.MONGO_URI, config.DB_NAME)
         self.ai = QuestionGenerator(config.OPENAI_API_KEY, config.MODEL_NAME)
-        print(hasattr(self.ai, "generate"))
         self._question_counter = 0
         self._stats = {
             'total_generated': 0,
@@ -110,10 +109,10 @@ class ContentAgent:
         logger.info(f"📝 Using seed - Topic: {seed.get('topic', 'N/A')}, Subtopic: {seed.get('subtopic', 'N/A')}")
         
         try:
-            new_questions = self.ai.generate(
-            json.dumps(seed, default=str),
-            count=config.BATCH_SIZE
-            )
+            # ✅ Generate returns JSON string, parse it
+            raw_response = self.ai.generate(json.dumps(seed, default=str), count=config.BATCH_SIZE)
+            new_questions = json.loads(raw_response)
+            
             logger.info(f"🤖 AI generated {len(new_questions)} questions")
             self._stats['total_generated'] += len(new_questions)
             
@@ -144,9 +143,9 @@ class ContentAgent:
     def _process_questions(self, questions: List[Dict], seed: Dict) -> List[Dict]:
         """Filter duplicates and hydrate questions with metadata."""
         topic = seed.get('topic')
-        exam_slug = seed.get('examSlug')  # ✅ ADDED
+        exam_slug = seed.get('examSlug')
         
-        # ✅ FIXED: Use scoped query
+        # ✅ Use scoped query
         existing_questions = self.db.get_questions_by_topic_and_exam(topic, exam_slug)
         logger.info(f"🔍 Checking against {len(existing_questions)} existing questions in topic '{topic}' for exam '{exam_slug}'")
         
@@ -201,7 +200,7 @@ class ContentAgent:
         question['sectionName'] = seed.get('sectionName')
         question['topic'] = seed.get('topic')
         question['subtopic'] = seed.get('subtopic')
-        question["answerText"] = question.get("answerText", "")
+        
         question['status'] = config.DEFAULT_STATUS
         question['__v'] = config.DEFAULT_VERSION
         question['tags'] = question.get('tags', [])
